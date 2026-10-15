@@ -1,0 +1,1 @@
+{"description":"Cloudflare Worker bridging QQ Mail IMAP/SMTP over HTTPS JSON API","devDependencies":{"wrangler":"^3.0.0"},"name":"muse-bridge","private":true,"scripts":{"deploy":"wrangler deploy","dev":"wrangler dev"},"version":"0.1.0"}
