@@ -9,13 +9,22 @@ export class SmtpClient {
     this.writer = writer;
   }
 
-  static async open(host, port, user, pass) {
-    const sock = connect({ hostname: host, port }, { secureTransport: 'on' });
-    const reader = sock.readable.getReader();
-    const writer = sock.writable.getWriter();
-    const c = new SmtpClient(sock, reader, writer);
-    await c._expect([220]);
+  static async open(host, port, user, pass, starttls = false) {
+    let sock = connect({ hostname: host, port }, { secureTransport: starttls ? 'starttls' : 'on' });
+    let reader = sock.readable.getReader();
+    let writer = sock.writable.getWriter();
+    let c = new SmtpClient(sock, reader, writer);
+    const greet = await c._readReply();
+    if (greet.code !== 220) throw new MailError('SMTP greeting failed (' + greet.code + ')');
     await c._cmd(`EHLO muse-bridge`, [250]);
+    if (starttls) {
+      await c._cmd('STARTTLS', [220]);
+      sock = sock.startTls();
+      reader = sock.readable.getReader();
+      writer = sock.writable.getWriter();
+      c = new SmtpClient(sock, reader, writer);
+      await c._cmd(`EHLO muse-bridge`, [250]);
+    }
     await c._cmd('AUTH LOGIN', [334]);
     await c._cmd(b64(user), [334]);
     await c._cmd(b64(pass), [235]);

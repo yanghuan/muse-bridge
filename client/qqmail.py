@@ -13,8 +13,8 @@ Usage:
 """
 import json
 import os
+import subprocess
 import sys
-import urllib.request
 
 CONFIG = os.path.expanduser('~/.config/muse-bridge/env')
 
@@ -32,18 +32,19 @@ def load_config():
 
 def api(path, payload):
     cfg = load_config()
-    req = urllib.request.Request(
-        cfg['BRIDGE_URL'].rstrip('/') + path,
-        data=json.dumps(payload).encode(),
-        headers={
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + cfg['BRIDGE_TOKEN'],
-        },
-        method='POST',
+    # Use curl: Python's TLS fingerprint (JA3) gets flagged as bot by
+    # Cloudflare edge on *.workers.dev, while curl passes through.
+    p = subprocess.run(
+        ['curl', '-s', '--max-time', '60',
+         '-X', 'POST', cfg['BRIDGE_URL'].rstrip('/') + path,
+         '-H', 'Content-Type: application/json',
+         '-H', 'Authorization: Bearer ' + cfg['BRIDGE_TOKEN'],
+         '-d', json.dumps(payload)],
+        capture_output=True, text=True, timeout=70,
     )
-    # Uses https_proxy from environment (required in sandboxed egress).
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)
+    if p.returncode != 0:
+        sys.exit('request failed: ' + p.stderr.strip()[:120])
+    return json.loads(p.stdout)
 
 
 def cmd_list(args):

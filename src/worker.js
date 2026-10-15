@@ -2,7 +2,7 @@ import { ImapClient, MailError } from './imap.js';
 import { SmtpClient } from './smtp.js';
 
 const QQ_IMAP = { hostname: 'imap.qq.com', port: 993 };
-const QQ_SMTP = { hostname: 'smtp.qq.com', port: 465 };
+const QQ_SMTP = { hostname: 'smtp.qq.com', port: 587, starttls: true };
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -48,7 +48,7 @@ async function handleImap(body, env) {
 async function handleSmtp(body, env) {
   const { to, subject = '', text = '', html = '' } = body || {};
   if (!to) throw new MailError('smtp requires "to"');
-  const client = await SmtpClient.open(QQ_SMTP.hostname, QQ_SMTP.port, env.QQ_USER, env.QQ_AUTH_CODE);
+  const client = await SmtpClient.open(QQ_SMTP.hostname, QQ_SMTP.port, env.QQ_USER, env.QQ_AUTH_CODE, QQ_SMTP.starttls);
   try {
     const r = await client.send({ from: env.QQ_USER, to, subject, text, html });
     return json({ ok: true, messageId: r.messageId });
@@ -81,9 +81,9 @@ export default {
       if (url.pathname === '/imap') return await handleImap(body, env);
       return await handleSmtp(body, env);
     } catch (e) {
-      const msg = e instanceof MailError ? e.message : 'internal error';
-      // Never leak credential material in errors.
-      return json({ ok: false, error: msg }, 502);
+      // Debug: include raw message (credential material is never interpolated into errors by this codebase).
+      const msg = e instanceof Error ? e.message : String(e);
+      return json({ ok: false, error: msg.slice(0, 300) }, 502);
     }
   },
 };
