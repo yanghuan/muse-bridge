@@ -1,8 +1,13 @@
 name = "muse-bridge"
-main = "src/worker.js"
+main = "dist/worker.js"
 compatibility_date = "2026-10-01"
 
-# Secrets (set via wrangler, never commit):
+# For Cloudflare GitHub integration (auto-deploy on push):
+# dashboard → Workers & Pages → muse-bridge → Settings → Build → Connect to Git
+[build]
+command = "npx esbuild src/worker.js --bundle --format=esm --platform=browser --outfile=dist/worker.js --external:cloudflare:sockets"
+
+# Secrets (set via wrangler or dashboard, never commit):
 #   wrangler secret put BRIDGE_TOKEN   # random token for API auth
 #   wrangler secret put QQ_USER        # e.g. sy.yanghuan@qq.com
 #   wrangler secret put QQ_AUTH_CODE   # QQ Mail authorization code (not the QQ password)
