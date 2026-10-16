@@ -1,0 +1,30 @@
+[package]
+name = "muse-bridge"
+version = "0.2.0"
+edition = "2021"
+description = "Stateless QQ Mail IMAP/SMTP bridge over HTTPS JSON API (musl static binary)"
+
+[[bin]]
+name = "muse-bridge"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Pure-Rust TLS: no OpenSSL, musl-static friendly.
+# NOTE: rustls 0.23.2x+ defaults to aws-lc-rs (huge C build); pin `ring`.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["tls12"] }
+webpki-roots = "0.26"
+base64 = "0.22"
+encoding_rs = "0.8"
+time = { version = "0.3", features = ["formatting"] }
+
+[profile.release]
+# small static binary
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1

@@ -1,0 +1,20 @@
+[Unit]
+Description=muse-bridge QQ Mail bridge (stateless, musl static binary)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Create user once: useradd -r -s /usr/sbin/nologin muse-bridge
+User=muse-bridge
+EnvironmentFile=/etc/muse-bridge/env
+ExecStart=/opt/muse-bridge/muse-bridge
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

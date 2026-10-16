@@ -1,57 +1,30 @@
 # muse-bridge
 
-Cloudflare Worker bridging QQ Mail IMAP/SMTP over an HTTPS JSON API.
+Stateless QQ Mail bridge: a single musl-static Rust binary exposing QQ Mail
+IMAP (read) and SMTP (send) as an HTTPS JSON API.
 
-**Why:** some sandboxed environments can't reach `imap.qq.com` / `smtp.qq.com`
-directly (egress proxy blocks the hosts; direct TLS is intercepted), while
-`*.workers.dev` over HTTPS works fine. This Worker accepts JSON over HTTPS and
-speaks raw IMAP/SMTP to QQ Mail on the other side via the Workers Sockets API.
+**Design:** the server stores no mailbox credentials. Every request carries its
+own `account: {user, auth_code}`, so any number of QQ mailboxes can be served.
+The only server-side secret is `BRIDGE_TOKEN`, which authorizes API callers
+(without it this would be an open SMTP relay).
 
-## Architecture
+## Build
 
-```
-sandbox --HTTPS/JSON--> Worker --TCP+TLS--> imap.qq.com:993 / smtp.qq.com:465
-```
-
-- `POST /imap` — list / search / fetch messages (IMAP)
-- `POST /smtp` — send a message (SMTP submission)
-- Stateless per request: one TCP connection per call, closed afterwards.
-  No IMAP IDLE; poll instead.
-
-## Setup
-
-### 1. QQ Mail: enable IMAP/SMTP and get an authorization code
-
-1. Log in to https://mail.qq.com
-2. 设置 → 账户 → POP3/IMAP/SMTP/Exchange/CardDAV/CalDAV服务
-3. Enable **IMAP/SMTP服务**, verify via SMS, and generate an **授权码**
-   (this is NOT your QQ password — it's a 16-char token for third-party clients).
-
-### 2. Deploy the Worker
-
-```bash
-npm install
-npx wrangler login
-npx wrangler secret put BRIDGE_TOKEN   # random token, used as API bearer
-npx wrangler secret put QQ_USER        # e.g. sy.yanghuan@qq.com
-npx wrangler secret put QQ_AUTH_CODE   # the 16-char authorization code
-npx wrangler deploy
+```sh
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+# -> target/x86_64-unknown-linux-musl/release/muse-bridge  (single static binary)
 ```
 
-Note the assigned URL, e.g. `https://muse-bridge.<you>.workers.dev`.
+Pure-Rust TLS (rustls, no OpenSSL), so the musl static build just works.
 
-### 3. Sandbox client config
+## Run
 
-```bash
-mkdir -p ~/.config/muse-bridge && chmod 700 ~/.config/muse-bridge
-cat > ~/.config/muse-bridge/env <<'EOF'
-BRIDGE_URL=https://muse-bridge.<you>.workers.dev
-BRIDGE_TOKEN=<same token as above>
-EOF
-chmod 600 ~/.config/muse-bridge/env
+```sh
+BRIDGE_TOKEN=$(openssl rand -hex 32) LISTEN_ADDR=127.0.0.1:8080 ./muse-bridge
 ```
 
-HTTPS goes through `https_proxy` from the environment (required for sandboxed egress).
+Systemd: see `deploy/muse-bridge.service` + `deploy/env.example`.
 
 ## API
 
@@ -59,50 +32,62 @@ All endpoints require `Authorization: Bearer <BRIDGE_TOKEN>`.
 
 ### POST /imap
 
-```jsonc
-// list recent (or unseen) messages
-{ "action": "list", "mailbox": "INBOX", "limit": 20, "unseen": false }
-
-// search with raw IMAP criteria
-{ "action": "search", "criteria": "FROM \"no-reply@accounts.google.com\"", "limit": 20 }
-
-// fetch one full message by UID (raw RFC822, capped at 256KB)
-{ "action": "fetch", "uid": 12345 }
-```
-
-Response: `{ "ok": true, "total": N, "messages": [{ "uid", "from", "to", "subject", "date" }] }`
-or `{ "ok": true, "message": { "uid", "size", "truncated", "raw" } }`.
-
-### POST /smtp
-
-```jsonc
+```json
 {
-  "to": "a@b.com",            // or ["a@b.com", "c@d.com"]
-  "subject": "hello",
-  "text": "plain body",       // optional if html given
-  "html": "<p>html body</p>"  // optional
+  "account": {"user": "a@qq.com", "auth_code": "<QQ 授权码>"},
+  "action": "list | search | fetch",
+  "mailbox": "INBOX",
+  "limit": 20,
+  "unseen": false,
+  "criteria": "SUBJECT \"hello\"",
+  "uid": 123
 }
 ```
 
-Response: `{ "ok": true, "messageId": "..." }`.
+- `list`: newest `limit` messages (headers only), `total` = mailbox count.
+- `search`: IMAP SEARCH criteria, e.g. `SUBJECT "x"`, `FROM "y"`, `UNSEEN`.
+- `fetch`: full raw message by UID (truncated at 256 KiB, `truncated` flag set).
 
-Errors: `{ "ok": false, "error": "..." }` (credential material is never echoed).
+### POST /smtp
 
-## Client usage
-
-```bash
-python3 client/qqmail.py list --unseen --limit 10
-python3 client/qqmail.py search 'SUBJECT "安全提醒"'
-python3 client/qqmail.py fetch 12345
-python3 client/qqmail.py send --to a@b.com --subject 'hi' --body 'hello'
+```json
+{
+  "account": {"user": "a@qq.com", "auth_code": "<QQ 授权码>"},
+  "from": "a@qq.com",
+  "to": ["b@example.com"],
+  "subject": "hi",
+  "text": "hello",
+  "html": "<p>hello</p>"
+}
 ```
 
-## Known limitations
+`from` defaults to `account.user`; `to` accepts a string or an array.
 
-- SMTP submission via Workers (port 465) has scattered real-world failure
-  reports (`proxy request failed` / TLS handshake failures on deploy while
-  `wrangler dev` works). **Test `/smtp` right after deploy**; if QQ's 465
-  fails, try switching the Worker to port 587 + STARTTLS.
-- Request/response only — no push/IDLE. Poll on whatever cadence you need.
-- The bridge token is a bearer secret: anyone holding it can read/send your
-  QQ mail. Rotate with `wrangler secret put BRIDGE_TOKEN` if leaked.
+## Client
+
+`client/qqmail.py` — sandbox-side CLI. Config `~/.config/muse-bridge/env` (0600):
+
+```
+BRIDGE_URL=https://bridge.example.com
+BRIDGE_TOKEN=<token>
+QQ_USER=a@qq.com
+QQ_AUTH_CODE=<code>
+QQ_USER_2=b@qq.com
+QQ_AUTH_CODE_2=<code>
+```
+
+```sh
+qqmail.py list
+qqmail.py -a b@qq.com list --unseen --limit 10
+qqmail.py search 'SUBJECT "账单"'
+qqmail.py fetch 12345
+qqmail.py send --to x@y.com --subject hi --body hello
+```
+
+## Notes
+
+- QQ 邮箱授权码在 mail.qq.com 设置 → 账户 → POP3/IMAP/SMTP 开启后生成（不是 QQ 密码）。
+- The server never logs request bodies or credentials; mail errors are
+  returned to the caller only.
+- Supersedes the earlier Cloudflare Worker prototype (removed): Workers
+  cannot open outbound SMTP connections, so sending was impossible there.
